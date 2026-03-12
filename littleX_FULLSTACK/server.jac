@@ -619,3 +619,47 @@ walker create_channel_tweet {
         report {"error": "Not a member of this channel"};
     }
 }
+
+walker:pub import_data {
+    has data: dict[dict[str, str, str, int, str, bool, list[dict[str, str, int, str]], list[str], str]];
+
+    can run with Root entry {
+        print(f'There are {len(self.data.keys())} profiles')
+        usernames = list(self.data.keys())
+        for r in allroots() {
+            prof = [r-->(?:Profile)];
+            if not prof {
+                continue;
+            }
+            username = prof[0].username;
+
+            if username not in self.data and username != 'Viewer' {
+                continue;
+            }
+
+            for s in allroots() {
+                target_list = [s-->(?:Profile)];
+                # override for the viewer user. they follow everyone
+                if target_list and (username == 'Viewer' or jid(target_list[0]) in self.data[username]['following']) {
+                    prof[0] +>:Follow():+> target_list[0];
+                }
+            }
+
+            # ignore users we aren't importing
+            if username not in self.data {
+                continue;
+            }
+            for tweet_data in self.data[username]['tweets'] {
+                tweet = prof[0] +>:Post():+> Tweet(
+                    content=tweet_data['content'],
+                    author_username=username,
+                    created_at=tweet_data['timestamp'],
+                    # get the first $tweet_data.likes usernames for the likes. 
+                    likes=usernames[:min(tweet_data['likes'], len(usernames))],
+                    comments=[]
+                );
+                grant(tweet[0], level=ConnectPerm);
+            }
+        }
+    }
+}

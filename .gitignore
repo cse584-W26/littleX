@@ -1,2 +1,9 @@
 .jac_mypy_cache/
 .jac/
+
+benchmark/
+
+.DS_Store
+.venv
+.python-version
+*.paw

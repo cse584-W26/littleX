@@ -18,7 +18,8 @@ import from server {
         leave_channel,
         get_channels,
         get_channel_detail,
-        create_channel_tweet
+        create_channel_tweet,
+        import_data
     }
 
 
