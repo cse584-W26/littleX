@@ -26,6 +26,8 @@ node Profile {
     has username: str = "";
     has bio: str = "";
     has created_at: str = "";
+    # i'm unable to find how to filter based on the jac_id, so adding it as an attribute for now
+    has jac_id: str = "";
 }
 
 node Tweet {
@@ -34,6 +36,7 @@ node Tweet {
     has created_at: str = "";
     has likes: list = [];
     has comments: list = [];
+    has jac_id: str = "";
 }
 
 node Channel {
@@ -57,6 +60,7 @@ walker setup_profile {
         if not profiles {
             p = here ++> Profile(username=self.username, bio=self.bio, created_at=_now());
             grant(p[0], level=ConnectPerm);
+            p[0].jac_id = jid(p[0]);
             report {"id": jid(p[0]), "username": p[0].username, "bio": p[0].bio, "created_at": p[0].created_at};
         } else {
             profile = profiles[0];
@@ -84,21 +88,13 @@ walker get_profile {
         followers: list = [];
         following: list = [];
 
-        for r in allroots() {
-            other_list = [r-->(?:Profile)];
-            if other_list {
-                other = other_list[0];
-                if jid(other) != my_id {
-                    follow_out = [edge other ->:Follow:-> p];
-                    if follow_out {
-                        followers.append({"id": jid(other), "username": other.username});
-                    }
-                    follow_in = [edge p ->:Follow:-> other];
-                    if follow_in {
-                        following.append({"id": jid(other), "username": other.username});
-                    }
-                }
-            }
+        follow_in = [p->:Follow:->Profile];
+        for other in follow_in {
+            following.append({"id": jid(other), "username": other.username});
+        }
+        follow_out = [p<-:Follow:<-];
+        for other in follow_out {
+            followers.append({"id": jid(other), "username": other.username});
         }
 
         tweets = [
@@ -146,16 +142,14 @@ walker follow_user {
             report {"error": "No profile"};
             disengage;
         }
-        my_profile = my_profiles[0];
-        for r in allroots() {
-            target_list = [r-->(?:Profile)];
-            if target_list and jid(target_list[0]) == self.target_id {
-                my_profile +>:Follow():+> target_list[0];
-                report {"success": True};
-                disengage;
-            }
+        target = [allroots()-->(?:Profile, jac_id == self.target_id)];
+        if not target {
+            report {"error": "User not found"};
+            disengage;
         }
-        report {"error": "User not found"};
+        my_profiles[0] +>:Follow():+>target[0];
+        report {"success": True};
+        disengage;
     }
 }
 
@@ -169,18 +163,14 @@ walker unfollow_user {
             disengage;
         }
         my_profile = my_profiles[0];
-        for r in allroots() {
-            target_list = [r-->(?:Profile)];
-            if target_list and jid(target_list[0]) == self.target_id {
-                follow_edges = [edge my_profile ->:Follow:-> target_list[0]];
-                if follow_edges {
-                    del follow_edges[0];
-                }
-                report {"success": True};
-                disengage;
-            }
+        target_edge = [edge my_profile->:Follow:->Profile];
+        if not target_edge {
+            report {"error": "User not found"};
+            disengage;
         }
-        report {"error": "User not found"};
+        del target_edge[0];
+        report {"success": True};
+        disengage;
     }
 }
 
@@ -203,6 +193,7 @@ walker create_tweet {
         );
         grant(tweet[0], level=ConnectPerm);
         t = tweet[0];
+        t.jac_id = jid(t);
         report {"id": jid(t), "content": t.content, "author_username": t.author_username, "created_at": t.created_at, "likes": t.likes, "comments": t.comments};
     }
 }
@@ -217,24 +208,32 @@ walker delete_tweet {
             disengage;
         }
         profile = profiles[0];
-        for tweet in [profile-->(?:Tweet)] {
-            if jid(tweet) == self.tweet_id {
-                del tweet;
-                report {"success": True};
-                disengage;
-            }
+        tweet = [profile-->(?:Tweet, jac_id == self.tweet_id)];
+        if tweet {
+            del tweet[0];
+            report {"success": True};
+            disengage;
         }
-        for channel in [profile-->(?:Channel)] {
-            for tweet in [channel-->(?:Tweet)] {
-                if jid(tweet) == self.tweet_id and tweet.author_username == profile.username {
-                    del tweet;
-                    report {"success": True};
-                    disengage;
-                }
-            }
+        channel_tweet = [profile-->(?:Channel)-->(?:Tweet, jac_id == self.tweet_id)];
+        if channel_tweet {
+            del channel_tweet[0];
+            report {"success": True};
+            disengage;
         }
         report {"error": "Tweet not found"};
     }
+}
+
+def find_tweet(tweet_id: str) -> Tweet | None {
+    tweet = [allroots()-->(?:Profile)-->(?:Tweet, jac_id == tweet_id)];
+    if tweet {
+        return tweet[0];
+    }
+    channel_tweet = [allroots()-->(?:Profile)-->(?:Channel)-->(?:Tweet)];
+    if channel_tweet {
+        return channel_tweet[0];
+    }
+    return None;
 }
 
 walker like_tweet {
@@ -247,36 +246,16 @@ walker like_tweet {
             disengage;
         }
         username = my_profiles[0].username;
-        for r in allroots() {
-            prof_list = [r-->(?:Profile)];
-            if prof_list {
-                for tweet in [prof_list[0]-->(?:Tweet)] {
-                    if jid(tweet) == self.tweet_id {
-                        if username in tweet.likes {
-                            tweet.likes = [u for u in tweet.likes if u != username];
-                            report {"liked": False, "likes": tweet.likes};
-                        } else {
-                            tweet.likes = tweet.likes + [username];
-                            report {"liked": True, "likes": tweet.likes};
-                        }
-                        disengage;
-                    }
-                }
-                for channel in [prof_list[0]-->(?:Channel)] {
-                    for tweet in [channel-->(?:Tweet)] {
-                        if jid(tweet) == self.tweet_id {
-                            if username in tweet.likes {
-                                tweet.likes = [u for u in tweet.likes if u != username];
-                                report {"liked": False, "likes": tweet.likes};
-                            } else {
-                                tweet.likes = tweet.likes + [username];
-                                report {"liked": True, "likes": tweet.likes};
-                            }
-                            disengage;
-                        }
-                    }
-                }
+        tweet = find_tweet(self.tweet_id);
+        if tweet {
+            if username in tweet.likes {
+                tweet.likes = [u for u in tweet.likes if u != username];
+                report {"liked": False, "likes": tweet.likes};
+            } else {
+                tweet.likes.append(username);
+                report {"liked": True, "likes": tweet.likes};
             }
+            disengage;
         }
         report {"error": "Tweet not found"};
     }
@@ -293,28 +272,12 @@ walker add_comment {
             disengage;
         }
         username = my_profiles[0].username;
-        for r in allroots() {
-            prof_list = [r-->(?:Profile)];
-            if prof_list {
-                for tweet in [prof_list[0]-->(?:Tweet)] {
-                    if jid(tweet) == self.tweet_id {
-                        comment = {"username": username, "content": self.content, "created_at": _now()};
-                        tweet.comments = tweet.comments + [comment];
-                        report {"success": True, "comment": comment};
-                        disengage;
-                    }
-                }
-                for channel in [prof_list[0]-->(?:Channel)] {
-                    for tweet in [channel-->(?:Tweet)] {
-                        if jid(tweet) == self.tweet_id {
-                            comment = {"username": username, "content": self.content, "created_at": _now()};
-                            tweet.comments = tweet.comments + [comment];
-                            report {"success": True, "comment": comment};
-                            disengage;
-                        }
-                    }
-                }
-            }
+        tweet = find_tweet(self.tweet_id);
+        if tweet {
+            comment = {"username": username, "content": self.content, "created_at": _now()};
+            tweet.comments.append(comment);
+            report {"success": True, "comment": comment};
+            disengage;
         }
         report {"error": "Tweet not found"};
     }
@@ -595,7 +558,7 @@ walker create_channel_tweet {
         }
         profile = profiles[0];
         for ch in [profile-->(?:Channel)] {
-            if jid(ch) == self.channel_id {
+            if jid(ch) == self.channel_id { 
                 tweet = ch +>:ChannelPost():+> Tweet(
                     content=self.content,
                     author_username=profile.username,
@@ -641,6 +604,10 @@ walker:pub import_data {
                 target_list = [s-->(?:Profile)];
                 # override for the viewer user. they follow everyone
                 if target_list and (username == 'Viewer' or jid(target_list[0]) in self.data[username]['following']) {
+                    # don't let the viewer follow themself
+                    if (username == 'Viewer' and jid(target_list[0]) == jid(prof[0])) {
+                        continue;
+                    }
                     prof[0] +>:Follow():+> target_list[0];
                 }
             }
