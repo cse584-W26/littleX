@@ -587,7 +587,7 @@ walker:pub import_data {
     has data: dict[dict[str, str, str, int, str, bool, list[dict[str, str, int, str]], list[str], str]];
 
     can run with Root entry {
-        print(f'There are {len(self.data.keys())} profiles')
+        print(f'There are {len(self.data.keys())} profiles');
         usernames = list(self.data.keys());
         for r in allroots() {
             prof = [r-->(?:Profile)];
