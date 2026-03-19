@@ -19,7 +19,10 @@ import from server {
         get_channels,
         get_channel_detail,
         create_channel_tweet,
-        import_data
+        import_data,
+        clear_cache,
+        bench_feed,
+        bench_single_hop
     }
 
 
