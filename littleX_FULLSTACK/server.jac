@@ -589,6 +589,192 @@ walker create_channel_tweet {
     }
 }
 
+walker bench_feed {
+    has clear_before: bool = False;
+    has index_enabled: str = "";
+
+    can run with Root entry {
+        import os;
+        import from jaclang { JacRuntimeInterface as Jac }
+        import from time { perf_counter }
+
+        # Set index flag via env var (empty = use config default)
+        prev_env = os.environ.get("JAC_INDEX_ENABLED");
+        if self.index_enabled {
+            os.environ["JAC_INDEX_ENABLED"] = self.index_enabled;
+        }
+
+        ctx = Jac.get_context();
+        l1_size_before = len(ctx.mem.__mem__);
+
+        if self.clear_before {
+            # Stub out all edges so source/target refs are released
+            for (uid, anchor) in list(ctx.mem.__mem__.items()) {
+                if hasattr(anchor, "edges") and anchor.is_populated() {
+                    anchor.edges = [e.make_stub() for e in anchor.edges];
+                }
+            }
+            ctx.mem.__mem__.clear();
+            l2 = getattr(ctx.mem, "l2", None);
+            if l2 is not None {
+                l2.close();
+            }
+        }
+
+        l1_size_after_clear = len(ctx.mem.__mem__);
+
+        t0 = perf_counter();
+        my_profiles = [-->(?:Profile)];
+        t_profile = perf_counter();
+
+        if not my_profiles {
+            # Restore env
+            if prev_env is not None {
+                os.environ["JAC_INDEX_ENABLED"] = prev_env;
+            } elif self.index_enabled {
+                del os.environ["JAC_INDEX_ENABLED"];
+            }
+            report {"error": "No profile"};
+            disengage;
+        }
+        my_profile = my_profiles[0];
+        all_tweets: list = [];
+
+        t_tweets_start = perf_counter();
+        for tweet in [my_profile-->(?:Tweet)] {
+            all_tweets.append(jid(tweet));
+        }
+        t_my_tweets = perf_counter();
+
+        for followed in [my_profile->:Follow:->(?:Profile)] {
+            for tweet in [followed-->(?:Tweet)] {
+                all_tweets.append(jid(tweet));
+            }
+        }
+        t_follow_tweets = perf_counter();
+
+        l1_size_after = len(ctx.mem.__mem__);
+
+        # Restore env
+        if prev_env is not None {
+            os.environ["JAC_INDEX_ENABLED"] = prev_env;
+        } elif self.index_enabled {
+            del os.environ["JAC_INDEX_ENABLED"];
+        }
+
+        report {
+            "tweet_count": len(all_tweets),
+            "index_enabled": self.index_enabled,
+            "l1_before": l1_size_before,
+            "l1_after_clear": l1_size_after_clear,
+            "l1_after": l1_size_after,
+            "ms_get_profile": round((t_profile - t0) * 1000, 3),
+            "ms_my_tweets": round((t_my_tweets - t_tweets_start) * 1000, 3),
+            "ms_follow_tweets": round((t_follow_tweets - t_my_tweets) * 1000, 3),
+            "ms_total_traversal": round((t_follow_tweets - t0) * 1000, 3)
+        };
+    }
+}
+
+walker bench_single_hop {
+    has clear_before: bool = False;
+    has index_enabled: str = "";
+
+    can run with Root entry {
+        import os;
+        import from jaclang { JacRuntimeInterface as Jac }
+        import from time { perf_counter }
+
+        prev_env = os.environ.get("JAC_INDEX_ENABLED");
+        if self.index_enabled {
+            os.environ["JAC_INDEX_ENABLED"] = self.index_enabled;
+        }
+
+        ctx = Jac.get_context();
+
+        if self.clear_before {
+            for (uid, anchor) in list(ctx.mem.__mem__.items()) {
+                if hasattr(anchor, "edges") and anchor.is_populated() {
+                    anchor.edges = [e.make_stub() for e in anchor.edges];
+                }
+            }
+            ctx.mem.__mem__.clear();
+            l2 = getattr(ctx.mem, "l2", None);
+            if l2 is not None {
+                l2.close();
+            }
+        }
+
+        l1_after_clear = len(ctx.mem.__mem__);
+
+        # Get profile first (always needed)
+        my_profiles = [-->(?:Profile)];
+        if not my_profiles {
+            if prev_env is not None {
+                os.environ["JAC_INDEX_ENABLED"] = prev_env;
+            } elif self.index_enabled {
+                del os.environ["JAC_INDEX_ENABLED"];
+            }
+            report {"error": "No profile"};
+            disengage;
+        }
+        my_profile = my_profiles[0];
+
+        # Single query: get ONLY tweets from profile
+        # Profile has Follow edges (noise) + Post edges (targets)
+        # INDEX ON should only load Tweet nodes
+        # INDEX OFF must iterate ALL edges and load ALL neighbors
+        t0 = perf_counter();
+        tweets = [my_profile-->(?:Tweet)];
+        t1 = perf_counter();
+
+        l1_after = len(ctx.mem.__mem__);
+
+        if prev_env is not None {
+            os.environ["JAC_INDEX_ENABLED"] = prev_env;
+        } elif self.index_enabled {
+            del os.environ["JAC_INDEX_ENABLED"];
+        }
+
+        report {
+            "tweet_count": len(tweets),
+            "index_enabled": self.index_enabled,
+            "l1_after_clear": l1_after_clear,
+            "l1_after": l1_after,
+            "ms_query": round((t1 - t0) * 1000, 3)
+        };
+    }
+}
+
+walker:pub clear_cache {
+    can run with Root entry {
+        import from jaclang { JacRuntimeInterface as Jac }
+        ctx = Jac.get_context();
+        # Convert all populated edges to stubs so that source/target
+        # references no longer keep node anchors alive in memory.
+        # This mirrors what graph-query-bench does before cold iterations.
+        stubbed = 0;
+        for (uid, anchor) in list(ctx.mem.__mem__.items()) {
+            if hasattr(anchor, "edges") and anchor.is_populated() {
+                anchor.edges = [e.make_stub() for e in anchor.edges];
+                stubbed += 1;
+            }
+        }
+        # Clear L1 in-memory anchor cache
+        ctx.mem.__mem__.clear();
+        # Clear L2 cache (Redis in scale, LocalCacheMemory otherwise)
+        l2 = getattr(ctx.mem, "l2", None);
+        if l2 is not None {
+            l2.close();
+        }
+        report {
+            "success": True,
+            "stubbed_nodes": stubbed,
+            "message": "Edges stubbed, L1 and L2 caches cleared"
+        };
+    }
+}
+
 walker:pub import_data {
     has data: dict[dict[str, str, str, int, str, bool, list[dict[str, str, int, str]], list[str], str]];
 
