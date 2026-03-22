@@ -1,7 +1,9 @@
 """Little X - Social graph backend with TF-IDF feed ranking."""
 
 import datetime;
-import from sklearn.feature_extraction.text { TfidfVectorizer }
+
+# commenting this out temporarily to avoid the scikit-learn dependency
+'''import from sklearn.feature_extraction.text { TfidfVectorizer }
 import from sklearn.metrics.pairwise { cosine_similarity }
 
 glob _vectorizer: Any = TfidfVectorizer();
@@ -16,6 +18,10 @@ def _compute_sim(query: str, content: str) -> float {
     } except Exception {
         return 0.0;
     }
+}'''
+
+def _compute_sim(query: str, content: str) -> float {
+    return 0.0;
 }
 
 def _now() -> str {
@@ -625,6 +631,7 @@ walker:pub import_data {
                     likes=usernames[:min(tweet_data['likes'], len(usernames))],
                     comments=[]
                 );
+                tweet[0].jac_id = jid(tweet[0]);
                 grant(tweet[0], level=ConnectPerm);
             }
         }
