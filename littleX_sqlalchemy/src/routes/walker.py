@@ -60,7 +60,6 @@ def load_feed():
         .join(other_user, User.following),
         db.select(User.id).where(User.id == g.user.id)
     ).subquery())
-    # TODO CHECK IF OWN TWEETS SHOW UP
     tweets_query = (db
         .select(Tweet)
         .join_from(eligible_users, eligible_users.tweets)
