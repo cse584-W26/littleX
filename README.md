@@ -1,55 +1,32 @@
-# LittleX: A Minimalistic Social Media Platform Prototype
+# LittleX Fork 
 
-LittleX is a lightweight social media application developed using the **Jaseci Stack**. It serves as a demonstration of how Jaseci Stack can be utilized to build scalable and intelligent applications.
+We're mostly using [`littleX_FULLSTACK`](https://github.com/cse584-W26/littleX/tree/main/littleX_FULLSTACK) as our fork to test on. There's a new endpoint `(POST) /import_data` that accepts a JSON body ([schema here](https://github.com/cse584-W26/littleX-benchmarks?tab=readme-ov-file#dataset-schema)) to import tweets, follows, and likes for a existing users. Users must be created seperately from the `/user/register` API.
 
-## **About LittleX**
+The [littleX benchmarks](https://github.com/cse584-W26/littleX-benchmarks) are designed to work with `littleX_FULLSTACK`.
 
-LittleX is a minimalistic implementation of a **social media platform** that showcases the capabilities of the Jaseci Stack. It includes features such as:
+### SQLAlchemy Implementation
 
-1. **User Profiles**:
-   - Create and manage user accounts.
-   - Follow other users and track relationships.
+In the [`littleX_sqlalchemy`](https://github.com/cse584-W26/littleX/tree/main/littleX_sqlalchemy), there is a Flask app using SQLAlchemy that implements the following APIs exactly like `littleX_FULLSTACK`, so any scripts that work for fullstack can be compared to a sqlalchemy baseline. There's an example comparison for data imports in the README in that folder.
 
-2. **Tweets**:
-   - Post, view, and interact with tweets.
+Authentication is not implemented properly at the moment, instead, passing a header `Authorization: Bearer <username>` will let the request be logged-in as `<username>`.
 
-3. **Comments and Likes**:
-   - Engage with tweets through comments and likes.
+#### Implemented APIs
 
-4. **AI-Powered Features**:
-   - Utilizes **MTLLM** for GPT-4o summarization and SentenceTransformer for semantic search, enhancing user interactions.
-
-5. **Cloud Deployment**:
-   - Deploy workflows, walkers, and AI features to **Jac Cloud** for seamless scaling and execution.
-
-## **LittleX Architecture**
-
-![Architecture](Documentation/images/Architecture.png)
-
-
-## **Running LittleX on Local Environment**
-
-### 1. Clone the Repository
-
-Start by cloning the **LittleX** repository to your local system:
-
-```bash
-git clone https://github.com/Jaseci-Labs/littleX.git
-cd littlex
 ```
-### 2. Install Dependencies
-```bash
-pip install -r littleX_BE/requirements.txt
+/user/login
+/user/register
+
+/walker/add_comment
+/walker/create_tweet
+/walker/delete_tweet
+/walker/follow_user
+/walker/unfollow_user
+/walker/get_all_profiles
+/walker/get_profile
+/walker/import_data
+/walker/like_tweet
+/walker/load_feed
+/walker/setup_profile
 ```
 
-### 3. Start the Backend Server
-```bash
-jac serve littleX_BE/littleX.jac
-```
-### 4. Run the Frontend Server
-Open another command line
-```bash
-cd littleX_FE
-npm i
-npm run dev
-```
+There's also another endpoint `(POST) /resetdb` which will just clear the database, avoiding having to teardown a Postgres DB every time.

@@ -7,3 +7,5 @@ benchmark/
 .venv
 .python-version
 *.paw
+
+__pycache__/
