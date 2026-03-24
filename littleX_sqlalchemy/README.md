@@ -14,6 +14,12 @@ You can run the app like any flask app by just running `flask --app src run`. By
 
 While this version isn't incredibly fast or optimized, it doesn't suffer from the exponential time blowup that the Jac version does. Below are two tables that measure import times from the [benchmark import_data script](https://github.com/cse584-W26/littleX-benchmarks/blob/main/import_data.py) at different amounts of users. These were run locally using the dev server for each on a M1 Max Macbook Pro
 
+At a glance, the dataset consists of
+- 15,000 tweets
+- 5,001 users
+- 23,162 follows
+- 7,543,197 total likes
+
 #### User Creation
 | Users | SQLAlchemy Memory | SQLAlchemy Postgres | Jaseci | 
 | --- | --- | --- | --- |
