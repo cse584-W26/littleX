@@ -46,7 +46,8 @@ from src.routes.walker import bp as walker_bp
 app.register_blueprint(user_bp, url_prefix='/user')
 app.register_blueprint(walker_bp, url_prefix='/walker')
 
-@app.route('/resetdb', methods=["POST"])
+# changed url to line up with the one the script expects
+@app.route('/walker/clear_data', methods=["POST"])
 def reset_db():
     db.drop_all()
     db.create_all()

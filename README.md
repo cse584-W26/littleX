@@ -29,4 +29,4 @@ Authentication is not implemented properly at the moment, instead, passing a hea
 /walker/setup_profile
 ```
 
-There's also another endpoint `(POST) /resetdb` which will just clear the database, avoiding having to teardown a Postgres DB every time.
+There's also another endpoint `(POST) /walker/clear_data` which will just clear the database, avoiding having to teardown a Postgres DB every time.
