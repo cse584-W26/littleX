@@ -30,3 +30,8 @@ Authentication is not implemented properly at the moment, instead, passing a hea
 ```
 
 There's also another endpoint `(POST) /walker/clear_data` which will just clear the database, avoiding having to teardown a Postgres DB every time.
+
+
+### MongoDB Implementation
+
+In the [`littleX_mongo`](https://github.com/cse584-W26/littleX/tree/main/littleX_mongo), there's an adapted version of the SQLAlchemy app that uses a mongo backing. It should have the same outward facing behavior as the sqlalchemy version (same authentication scheme and implemented APIs, including the clear data api)
