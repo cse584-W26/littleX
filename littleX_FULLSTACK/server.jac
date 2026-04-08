@@ -746,6 +746,129 @@ walker bench_single_hop {
     }
 }
 
+walker bench_pushdown {
+    has operation: str = "global_profile";
+    has target_id: str = "";
+    has clear_before: bool = False;
+    has index_enabled: str = "";
+
+    can run with Root entry {
+        import os;
+        import from jaclang { JacRuntimeInterface as Jac }
+        import from time { perf_counter }
+
+        prev_env = os.environ.get("JAC_INDEX_ENABLED");
+        if self.index_enabled {
+            os.environ["JAC_INDEX_ENABLED"] = self.index_enabled;
+        }
+
+        ctx = Jac.get_context();
+        l1_before = len(ctx.mem.__mem__);
+
+        if self.clear_before {
+            for (uid, anchor) in list(ctx.mem.__mem__.items()) {
+                if hasattr(anchor, "edges") and anchor.is_populated() {
+                    anchor.edges = [e.make_stub() for e in anchor.edges];
+                }
+            }
+            ctx.mem.__mem__.clear();
+            l2 = getattr(ctx.mem, "l2", None);
+            if l2 is not None {
+                l2.close();
+            }
+        }
+
+        l1_after_clear = len(ctx.mem.__mem__);
+
+        if self.operation == "global_profile" {
+            # [allroots()-->(?:Profile, jac_id == X)] — needle in haystack across all users
+            t0 = perf_counter();
+            result = [allroots()-->(?:Profile, jac_id == self.target_id)];
+            t1 = perf_counter();
+            found = len(result) > 0;
+            result_count = len(result);
+        } elif self.operation == "global_tweet" {
+            # [allroots()-->(?:Profile)-->(?:Tweet, jac_id == X)] — 2-hop global lookup
+            t0 = perf_counter();
+            result = [allroots()-->(?:Profile)-->(?:Tweet, jac_id == self.target_id)];
+            t1 = perf_counter();
+            found = len(result) > 0;
+            result_count = len(result);
+        } elif self.operation == "local_tweet" {
+            # [profile-->(?:Tweet, jac_id == X)] — targeted lookup within user's tweets
+            my_profiles = [-->(?:Profile)];
+            if not my_profiles {
+                if prev_env is not None {
+                    os.environ["JAC_INDEX_ENABLED"] = prev_env;
+                } elif self.index_enabled {
+                    del os.environ["JAC_INDEX_ENABLED"];
+                }
+                report {"error": "No profile"};
+                disengage;
+            }
+            profile = my_profiles[0];
+            t0 = perf_counter();
+            result = [profile-->(?:Tweet, jac_id == self.target_id)];
+            t1 = perf_counter();
+            found = len(result) > 0;
+            result_count = len(result);
+        } elif self.operation == "load_feed_production" {
+            # Full load_feed path — same as production walker, measures type filter pushdown
+            t0 = perf_counter();
+            my_profiles = [-->(?:Profile)];
+            if not my_profiles {
+                if prev_env is not None {
+                    os.environ["JAC_INDEX_ENABLED"] = prev_env;
+                } elif self.index_enabled {
+                    del os.environ["JAC_INDEX_ENABLED"];
+                }
+                report {"error": "No profile"};
+                disengage;
+            }
+            my_profile = my_profiles[0];
+            all_tweets: list = [];
+            for tweet in [my_profile-->(?:Tweet)] {
+                all_tweets.append(jid(tweet));
+            }
+            for followed in [my_profile->:Follow:->(?:Profile)] {
+                for tweet in [followed-->(?:Tweet)] {
+                    all_tweets.append(jid(tweet));
+                }
+            }
+            t1 = perf_counter();
+            found = True;
+            result_count = len(all_tweets);
+        } else {
+            if prev_env is not None {
+                os.environ["JAC_INDEX_ENABLED"] = prev_env;
+            } elif self.index_enabled {
+                del os.environ["JAC_INDEX_ENABLED"];
+            }
+            report {"error": "Unknown operation: " + self.operation};
+            disengage;
+        }
+
+        l1_after = len(ctx.mem.__mem__);
+
+        if prev_env is not None {
+            os.environ["JAC_INDEX_ENABLED"] = prev_env;
+        } elif self.index_enabled {
+            del os.environ["JAC_INDEX_ENABLED"];
+        }
+
+        report {
+            "operation": self.operation,
+            "index_enabled": self.index_enabled,
+            "found": found,
+            "result_count": result_count,
+            "l1_before": l1_before,
+            "l1_after_clear": l1_after_clear,
+            "l1_after": l1_after,
+            "ms_query": round((t1 - t0) * 1000, 3)
+        };
+    }
+}
+
 walker:pub clear_cache {
     can run with Root entry {
         import from jaclang { JacRuntimeInterface as Jac }
