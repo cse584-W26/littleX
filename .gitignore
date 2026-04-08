@@ -9,3 +9,11 @@ benchmark/
 *.paw
 
 __pycache__/
+.jac-ide/
+export-*.jacpack
+__jac_gen__/
+node_modules/
+dist/
+.env
+.jac-preview.log
+.jac-ide-bashrc
