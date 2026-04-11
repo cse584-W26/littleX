@@ -500,16 +500,13 @@ def import_data():
                       likes,
                       )
             for followee_id in payload.get("following", []):
-                if followee_id is None:
-                    continue
                 cur.execute(
                     "INSERT INTO follows (follower_id, followee_id) "
                     "VALUES (%s, %s) ON CONFLICT DO NOTHING",
                     (user_id, followee_id),
                 )
     
-        # have the Viewer user follow everyone
-        viewer = cur.execute("SELECT id from users WHERE handle = %s", ["Viewer"]).fetchone()
+        # have the Viewer user follow everyone        viewer = cur.execute("SELECT id from users WHERE handle = %s", ["Viewer"]).fetchone()
         if viewer:
           viewer_id = viewer['id']
           viewer_follows = [(viewer_id, id) for id in all_user_ids if id != viewer_id]
