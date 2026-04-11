@@ -478,27 +478,26 @@ def import_data():
         all_users = cur.fetchall()
         all_user_ids = [u['id'] for u in all_users]
         username_to_id = {u["username"]: u["id"] for u in all_users}
-
+        
         # Import tweets in bulk via executemany.
         for username, payload in data["data"].items():
             user_id = username_to_id.get(payload.get("email") or username)
             if user_id is None:
                 continue
             tweets = payload.get("tweets", [])
-            if tweets:
-                for tweet in tweets:
-                  tweet_id = cur.execute(
-                    "INSERT INTO tweets (author_id, content, created_at) VALUES (%s, %s, %s) RETURNING id",
-                    (user_id, tweet["content"], datetime.fromisoformat(tweet["timestamp"]))
-                  ).fetchone()['id']
-                  if tweet['likes'] > 0:
-                    likes = [
-                        (tweet_id, all_user_ids[user_idx]) for user_idx in range(0, min(tweet['likes'], len(all_user_ids)))
-                    ]
-                    cur.executemany(
-                      "INSERT INTO likes (tweet_id, user_id) VALUES (%s, %s)",
-                      likes,
-                      )
+            for tweet in tweets:
+              tweet_id = cur.execute(
+                "INSERT INTO tweets (author_id, content, created_at) VALUES (%s, %s, %s) RETURNING id",
+                (user_id, tweet["content"], datetime.fromisoformat(tweet["timestamp"]))
+              ).fetchone()['id']
+              if tweet['likes'] > 0:
+                likes = [
+                    (tweet_id, all_user_ids[user_idx]) for user_idx in range(0, min(tweet['likes'], len(all_user_ids)))
+                ]
+                cur.executemany(
+                  "INSERT INTO likes (tweet_id, user_id) VALUES (%s, %s)",
+                  likes,
+                  )
             for followee_id in payload.get("following", []):
                 cur.execute(
                     "INSERT INTO follows (follower_id, followee_id) "
