@@ -1,0 +1,22 @@
+[project]
+name = "littlex-sqlalchemy"
+version = "1.0.0"
+description = "LittleX SQLAlchemy baseline - relational DB, no graph"
+entry-point = "main.jac"
+
+[dependencies]
+sqlalchemy = ">=2.0"
+psycopg = ">=3.3"
+
+[dependencies.npm]
+jac-client-node = "1.0.7"
+
+[dependencies.npm.dev]
+"@jac-client/dev-deps" = "2.0.0"
+
+[run]
+topology_index = false
+
+[plugins.scale.kubernetes]
+jaseci_repo_url = "https://github.com/cse584-W26/jaseci.git"
+jaseci_branch = "sam-top-kube"

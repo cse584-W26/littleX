@@ -1,0 +1,272 @@
+# LittleX hand-tuned Postgres baseline on Kubernetes.
+#
+# Two pods in the same namespace where jac-scale runs:
+#
+#   1. Postgres 16 (StatefulSet) — same as the SQLAlchemy variant, but
+#      with a `postgresql.conf` mounted as a ConfigMap that bumps
+#      shared_buffers / work_mem / effective_cache_size to realistic
+#      production values. We deliberately keep `synchronous_commit = on`
+#      so the comparison stays honest.
+#
+#   2. Flask app (Deployment) using the stock python:3.12-slim image,
+#      with the source shipped via ConfigMap mount and an initContainer
+#      that pip-installs psycopg[binary,pool] + flask. NO custom Docker
+#      image, NO SQLAlchemy.
+#
+# Both have ClusterIP services so the bench host reaches the Flask app
+# via `kubectl port-forward svc/littlex-handtuned 8080:8000` — exactly the
+# same shape as the SQLAlchemy and Neo4j K8s deployments. Identical
+# topology means latency differences reflect the backend itself.
+---
+# ============================================================================
+# Tuned postgresql.conf
+# ============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: littlex-handtuned-pg-conf
+  labels:
+    app: littlex-handtuned
+    component: postgres
+data:
+  postgresql.conf: |
+    # ---- Memory ----
+    shared_buffers = 512MB
+    effective_cache_size = 1GB
+    work_mem = 16MB
+    maintenance_work_mem = 64MB
+
+    # ---- Connections ----
+    max_connections = 100
+
+    # ---- Planner ----
+    random_page_cost = 1.1
+    effective_io_concurrency = 200
+
+    # ---- Logging — quiet, we measure with PROFILE / EXPLAIN externally ----
+    log_min_duration_statement = -1
+    log_statement = 'none'
+
+    # ---- Listen ----
+    listen_addresses = '*'
+    port = 5432
+---
+# ============================================================================
+# Postgres
+# ============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: littlex-handtuned-postgres
+  labels:
+    app: littlex-handtuned
+    component: postgres
+spec:
+  type: ClusterIP
+  selector:
+    app: littlex-handtuned
+    component: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: littlex-handtuned-postgres
+  labels:
+    app: littlex-handtuned
+    component: postgres
+spec:
+  serviceName: littlex-handtuned-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: littlex-handtuned
+      component: postgres
+  template:
+    metadata:
+      labels:
+        app: littlex-handtuned
+        component: postgres
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              value: postgres
+            - name: POSTGRES_DB
+              value: littlex
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          # Tell Postgres to use our tuned config file. The default
+          # postgres-alpine entrypoint copies sample configs from the
+          # docker image; we override with -c to point at the mounted
+          # ConfigMap location.
+          args:
+            - "-c"
+            - "config_file=/etc/postgresql/postgresql.conf"
+          ports:
+            - name: postgres
+              containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", "littlex"]
+            initialDelaySeconds: 5
+            periodSeconds: 3
+            failureThreshold: 30
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", "littlex"]
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "768Mi"
+            limits:
+              cpu: "1500m"
+              memory: "1.5Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: pg-conf
+              mountPath: /etc/postgresql/postgresql.conf
+              subPath: postgresql.conf
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: pg-conf
+          configMap:
+            name: littlex-handtuned-pg-conf
+---
+# ============================================================================
+# Flask backend
+# ============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: littlex-handtuned
+  labels:
+    app: littlex-handtuned
+    component: flask
+spec:
+  type: ClusterIP
+  selector:
+    app: littlex-handtuned
+    component: flask
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: littlex-handtuned
+  labels:
+    app: littlex-handtuned
+    component: flask
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: littlex-handtuned
+      component: flask
+  template:
+    metadata:
+      labels:
+        app: littlex-handtuned
+        component: flask
+    spec:
+      enableServiceLinks: false
+      initContainers:
+        - name: pip-install
+          image: python:3.12-slim
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              pip install --no-cache-dir --target=/deps -r /code/requirements.txt
+              echo "deps installed at /deps:"
+              ls /deps | head -20
+          volumeMounts:
+            - name: src
+              mountPath: /code
+            - name: deps
+              mountPath: /deps
+      containers:
+        - name: flask
+          image: python:3.12-slim
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              export PYTHONPATH="/deps:/code"
+              export PATH="/deps/bin:$PATH"
+              cd /code
+              exec python -m flask --app src run --host 0.0.0.0 --port 8000 --with-threads
+          env:
+            - name: DATABASE_URL
+              value: "postgresql://postgres:postgres@littlex-handtuned-postgres:5432/littlex"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: FLASK_APP
+              value: src
+          ports:
+            - name: http
+              containerPort: 8000
+          readinessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 3
+            failureThreshold: 40
+          livenessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+          volumeMounts:
+            - name: src
+              mountPath: /code
+            - name: deps
+              mountPath: /deps
+      volumes:
+        - name: src
+          configMap:
+            name: littlex-handtuned-src
+            items:
+              - key: requirements.txt
+                path: requirements.txt
+              - key: src__init__.py
+                path: src/__init__.py
+              - key: src_db.py
+                path: src/db.py
+              - key: src_schema.sql
+                path: src/schema.sql
+              - key: src_routes_user.py
+                path: src/routes/user.py
+              - key: src_routes_walker.py
+                path: src/routes/walker.py
+        - name: deps
+          emptyDir: {}
