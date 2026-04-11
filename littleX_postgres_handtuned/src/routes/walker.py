@@ -506,7 +506,8 @@ def import_data():
                     (user_id, followee_id),
                 )
     
-        # have the Viewer user follow everyone        viewer = cur.execute("SELECT id from users WHERE handle = %s", ["Viewer"]).fetchone()
+        # have the Viewer user follow everyone
+        viewer = cur.execute("SELECT id from users WHERE handle = %s", ["Viewer"]).fetchone()
         if viewer:
           viewer_id = viewer['id']
           viewer_follows = [(viewer_id, id) for id in all_user_ids if id != viewer_id]
