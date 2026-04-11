@@ -476,6 +476,7 @@ def import_data():
         # Look up all existing user ids and usernames in one query.
         cur.execute("SELECT id, username FROM users")
         all_users = cur.fetchall()
+        all_user_ids = [u['id'] for u in all_users]
         username_to_id = {u["username"]: u["id"] for u in all_users}
 
         # Import tweets in bulk via executemany.
@@ -485,16 +486,20 @@ def import_data():
                 continue
             tweets = payload.get("tweets", [])
             if tweets:
-                rows = [
-                    (user_id, t["content"], datetime.fromisoformat(t["timestamp"]))
-                    for t in tweets
-                ]
-                cur.executemany(
-                    "INSERT INTO tweets (author_id, content, created_at) VALUES (%s, %s, %s)",
-                    rows,
-                )
-            for followee_username in payload.get("following", []):
-                followee_id = username_to_id.get(followee_username)
+                for tweet in tweets:
+                  tweet_id = cur.execute(
+                    "INSERT INTO tweets (author_id, content, created_at) VALUES (%s, %s, %s) RETURNING id",
+                    (user_id, tweet["content"], datetime.fromisoformat(tweet["timestamp"]))
+                  ).fetchone()['id']
+                  if tweet['likes'] > 0:
+                    likes = [
+                        (tweet_id, all_user_ids[user_idx]) for user_idx in range(0, min(tweet['likes'], len(all_user_ids)))
+                    ]
+                    cur.executemany(
+                      "INSERT INTO likes (tweet_id, user_id) VALUES (%s, %s)",
+                      likes,
+                      )
+            for followee_id in payload.get("following", []):
                 if followee_id is None:
                     continue
                 cur.execute(
@@ -502,5 +507,16 @@ def import_data():
                     "VALUES (%s, %s) ON CONFLICT DO NOTHING",
                     (user_id, followee_id),
                 )
+    
+        # have the Viewer user follow everyone
+        viewer = cur.execute("SELECT id from users WHERE handle = %s", ["Viewer"]).fetchone()
+        if viewer:
+          viewer_id = viewer['id']
+          viewer_follows = [(viewer_id, id) for id in all_user_ids if id != viewer_id]
+          cur.executemany(
+            "INSERT INTO follows (follower_id, followee_id) "
+            "VALUES (%s, %s)",
+            viewer_follows
+          )
 
     return singleton_response({"success": True})
