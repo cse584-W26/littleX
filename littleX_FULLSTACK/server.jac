@@ -40,7 +40,6 @@ node Tweet {
     has content: str = "";
     has author_username: str = "";
     has created_at: str = "";
-    has likes: list = [];
     has comments: list = [];
     has jac_id: str = "";
 }
@@ -53,6 +52,7 @@ node Channel {
 }
 
 edge Follow {}
+edge Like {}
 edge Post {}
 edge Member {}
 edge ChannelPost {}
@@ -109,7 +109,7 @@ walker get_profile {
                 "content": t.content,
                 "author_username": t.author_username,
                 "created_at": t.created_at,
-                "likes": t.likes,
+                "likes": [u.username for u in [t<-:Like:<-Profile]],
                 "comments": t.comments
             }
             for t in [p-->(?:Tweet)]
@@ -194,13 +194,12 @@ walker create_tweet {
             content=self.content,
             author_username=profile.username,
             created_at=_now(),
-            likes=[],
             comments=[]
         );
         grant(tweet[0], level=ConnectPerm);
         t = tweet[0];
         t.jac_id = jid(t);
-        report {"id": jid(t), "content": t.content, "author_username": t.author_username, "created_at": t.created_at, "likes": t.likes, "comments": t.comments};
+        report {"id": jid(t), "content": t.content, "author_username": t.author_username, "created_at": t.created_at, "likes": [], "comments": t.comments};
     }
 }
 
@@ -251,16 +250,19 @@ walker like_tweet {
             report {"error": "No profile"};
             disengage;
         }
-        username = my_profiles[0].username;
-        tweet = find_tweet(self.tweet_id);
-        if tweet {
-            if username in tweet.likes {
-                tweet.likes = [u for u in tweet.likes if u != username];
-                report {"liked": False, "likes": tweet.likes};
-            } else {
-                tweet.likes.append(username);
-                report {"liked": True, "likes": tweet.likes};
-            }
+        me = my_profiles[0];
+        username = me.username;
+        existing_liked_tweet = [me->:Like:->(?:Tweet, jac_id == self.tweet_id)];
+        if existing_liked_tweet {
+            target = existing_liked_tweet[0];
+            me del --> target;
+            report {"liked": False, "likes":[u.username for u in [target<-:Like:<-Profile]]};
+            disengage;
+        }
+        target = find_tweet(self.tweet_id);
+        if target {
+            me +>: Like :+> target;
+            report {"liked": True, "likes":[u.username for u in [target<-:Like:<-Profile]]};
             disengage;
         }
         report {"error": "Tweet not found"};
@@ -326,13 +328,14 @@ walker load_feed {
         my_profile = my_profiles[0];
         all_tweets: list = [];
 
-        for tweet in [my_profile-->(?:Tweet)] {
+        # explicitly look for things WE posted, not just things we have a connection to (like likes)
+        for tweet in [my_profile->:Post:->(?:Tweet)] {
             all_tweets.append({
                 "id": jid(tweet),
                 "content": tweet.content,
                 "author_username": tweet.author_username,
                 "created_at": tweet.created_at,
-                "likes": tweet.likes,
+                "likes": [u.username for u in [tweet<-:Like:<-(?:Profile)]],
                 "comments": tweet.comments,
                 "is_mine": True
             });
@@ -345,7 +348,7 @@ walker load_feed {
                     "content": tweet.content,
                     "author_username": tweet.author_username,
                     "created_at": tweet.created_at,
-                    "likes": tweet.likes,
+                    "likes": [u.username for u in [tweet<-:Like:<-(?:Profile)]],
                     "comments": tweet.comments,
                     "is_mine": False
                 });
@@ -528,7 +531,7 @@ walker get_channel_detail {
                                 "content": tweet.content,
                                 "author_username": tweet.author_username,
                                 "created_at": tweet.created_at,
-                                "likes": tweet.likes,
+                                "likes": [u.username for u in [tweet<-:Like:<-Profile]],
                                 "comments": tweet.comments
                             });
                         }
@@ -569,7 +572,6 @@ walker create_channel_tweet {
                     content=self.content,
                     author_username=profile.username,
                     created_at=_now(),
-                    likes=[],
                     comments=[]
                 );
                 grant(tweet[0], level=ConnectPerm);
@@ -579,7 +581,7 @@ walker create_channel_tweet {
                     "content": t.content,
                     "author_username": t.author_username,
                     "created_at": t.created_at,
-                    "likes": t.likes,
+                    "likes": [],
                     "comments": t.comments
                 };
                 disengage;
@@ -904,6 +906,15 @@ walker:pub import_data {
     can run with Root entry {
         print(f'There are {len(self.data.keys())} profiles');
         usernames = list(self.data.keys());
+        all_profiles = [];
+        # generate list of all profiles to use for generating likes
+        for r in allroots() {
+            prof = [r-->(?:Profile)];
+            if not prof {
+                continue;
+            }
+            all_profiles += prof;
+        }
         for r in allroots() {
             prof = [r-->(?:Profile)];
             if not prof {
@@ -936,12 +947,15 @@ walker:pub import_data {
                     content=tweet_data['content'],
                     author_username=username,
                     created_at=tweet_data['timestamp'],
-                    # get the first $tweet_data.likes usernames for the likes. 
-                    likes=usernames[:min(tweet_data['likes'], len(usernames))],
                     comments=[]
                 );
                 tweet[0].jac_id = jid(tweet[0]);
                 grant(tweet[0], level=ConnectPerm);
+
+                # get the first $tweet_data.likes usernames for the likes. 
+                for profile in all_profiles[:min(tweet_data['likes'], len(usernames))] {
+                    profile +>: Like :+> tweet[0];
+                }
             }
         }
     }
