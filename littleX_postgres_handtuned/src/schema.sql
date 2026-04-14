@@ -106,3 +106,28 @@ CREATE TABLE IF NOT EXISTS comments (
 );
 
 CREATE INDEX IF NOT EXISTS idx_comments_tweet_id ON comments (tweet_id);
+
+-- ---------------------------------------------------------------------
+-- channels + channel_members
+--
+-- Present purely so the own-tweets selectivity sweep can create
+-- "noise" fan-out edges (channel memberships) alongside a user's real
+-- tweets. load_own_tweets never queries these tables — the selectivity
+-- story on a relational backend is the same regardless of how many
+-- channels a user belongs to, since tweets live in their own table.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS channels (
+    id          BIGSERIAL    PRIMARY KEY,
+    name        TEXT         NOT NULL,
+    description TEXT         NOT NULL DEFAULT '',
+    created_at  TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS channel_members (
+    user_id     BIGINT       NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    channel_id  BIGINT       NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+    created_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, channel_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_channel_members_channel ON channel_members (channel_id);

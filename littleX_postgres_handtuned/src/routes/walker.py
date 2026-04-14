@@ -22,6 +22,7 @@ competent Postgres developer can make it on the LittleX workload:
   index on tweets is what makes load_feed fast.
 """
 
+import time
 from datetime import datetime
 
 from flask import Blueprint, request, g, abort, jsonify
@@ -460,6 +461,86 @@ def add_comment():
             "created_at": row["created_at"].isoformat(),
         },
     })
+
+
+# ---------------------------------------------------------------------------
+# create_channel — single INSERT for the channel + membership row.
+# The own-tweets selectivity sweep uses this to pad a user's fan-out
+# with "noise" edges. Untimed setup, no server-timed metrics returned.
+# ---------------------------------------------------------------------------
+
+@bp.route("/create_channel", methods=["POST"])
+def create_channel():
+    data = get_validated_body(["name"])
+    description = data.get("description", "") or ""
+    with db.conn() as c, c.cursor() as cur:
+        cur.execute(
+            "INSERT INTO channels (name, description) VALUES (%s, %s) RETURNING id",
+            (data["name"], description),
+        )
+        channel_id = cur.fetchone()["id"]
+        cur.execute(
+            "INSERT INTO channel_members (user_id, channel_id) VALUES (%s, %s) "
+            "ON CONFLICT DO NOTHING",
+            (g.user["id"], channel_id),
+        )
+    return singleton_response({"id": channel_id, "name": data["name"]})
+
+
+# ---------------------------------------------------------------------------
+# load_own_tweets — return just *this user's* tweets (no follow traversal).
+#
+# Matches the Jac `walker load_own_tweets` shape so the shared bench driver
+# (bench_own_tweets_selectivity.py) can read server-timed fields out of
+# data.reports[0]:
+#   - ms_traversal:     wall-clock around the SQL execute()
+#   - ms_build_payload: trivially 0, since Postgres builds the JSON inline
+#
+# The payload mirrors load_feed per-tweet (id, content, author_username,
+# created_at, likes, comments) so the correctness check in the bench driver
+# can count tweets without knowing the backend.
+# ---------------------------------------------------------------------------
+
+@bp.route("/load_own_tweets", methods=["POST"])
+def load_own_tweets():
+    sql = """
+        SELECT COALESCE(json_agg(
+            json_build_object(
+                'id', t.id,
+                'content', t.content,
+                'author_username', u.username,
+                'created_at', t.created_at,
+                'likes', COALESCE((
+                    SELECT json_agg(u2.username)
+                    FROM likes l JOIN users u2 ON u2.id = l.user_id
+                    WHERE l.tweet_id = t.id
+                ), '[]'::json),
+                'comments', COALESCE((
+                    SELECT json_agg(json_build_object(
+                        'username', c.author_handle,
+                        'content', c.content,
+                        'created_at', c.created_at
+                    ) ORDER BY c.created_at)
+                    FROM comments c WHERE c.tweet_id = t.id
+                ), '[]'::json)
+            ) ORDER BY t.created_at DESC
+        ), '[]'::json) AS tweets
+        FROM tweets t
+        JOIN users u ON u.id = t.author_id
+        WHERE t.author_id = %s
+    """
+    t0 = time.perf_counter()
+    with db.conn() as c, c.cursor() as cur:
+        cur.execute(sql, (g.user["id"],))
+        row = cur.fetchone()
+    ms_traversal = (time.perf_counter() - t0) * 1000
+    tweets = row["tweets"] or []
+    report = {
+        "tweets": tweets,
+        "ms_traversal": round(ms_traversal, 4),
+        "ms_build_payload": 0.0,
+    }
+    return build_response([report], result=tweets)
 
 
 # ---------------------------------------------------------------------------

@@ -122,6 +122,23 @@ class Tweet(db.Model):
        
     def report_likes(self):
         return [u.username for u in self.likes]
-        
-    
-    
+
+
+# Channel + ChannelMember exist only so the own-tweets selectivity sweep
+# can create "noise" fan-out edges alongside a user's real tweets.
+# load_own_tweets never queries them — on a relational backend the
+# selectivity story is the same regardless of membership count, since
+# tweets and memberships live in disjoint tables.
+channel_members_table = Table(
+    "channel_members",
+    db.Model.metadata,
+    Column('user_id', ForeignKey('user.id'), primary_key=True),
+    Column('channel_id', ForeignKey('channel.id'), primary_key=True),
+    Index('idx_channel_members_channel', 'channel_id'),
+)
+
+
+class Channel(db.Model):
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str]
+    description: Mapped[Optional[str]]

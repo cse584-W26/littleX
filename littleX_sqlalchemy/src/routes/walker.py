@@ -1,5 +1,9 @@
+import time
 from src import app, build_error, db, get_validated_body
-from src.models import User, Tweet, Comment, like_table, following_table
+from src.models import (
+    User, Tweet, Comment, Channel,
+    like_table, following_table, channel_members_table,
+)
 from flask import Blueprint, request, g, abort, jsonify
 from sqlalchemy.orm import aliased, selectinload, joinedload
 from datetime import datetime
@@ -267,6 +271,55 @@ def add_comment():
     db.session.add(new_comment)
     db.session.commit()
     return singleton_response({'success': True, 'comment': new_comment.report()})
+
+@bp.route('/create_channel', methods=['POST'])
+def create_channel():
+    # Untimed setup for the own-tweets selectivity sweep: creates a
+    # channel row and enrolls g.user as a member. The sweep uses this
+    # purely to pad fan-out with "noise" edges that load_own_tweets
+    # should ignore.
+    data = get_validated_body(['name'])
+    description = data.get('description', '') or ''
+    new_channel = Channel(name=data['name'], description=description)
+    db.session.add(new_channel)
+    db.session.flush()
+    db.session.execute(channel_members_table.insert().values(
+        user_id=g.user.id, channel_id=new_channel.id,
+    ))
+    db.session.commit()
+    return singleton_response({'id': new_channel.id, 'name': new_channel.name})
+
+
+@bp.route('/load_own_tweets', methods=['POST'])
+def load_own_tweets():
+    # Mirrors Jac's `walker load_own_tweets`: returns only the caller's
+    # own tweets (no follow-traversal). Reports server-timed ms_traversal
+    # (SQL round-trip) and ms_build_payload (per-tweet .report()) so the
+    # shared bench driver can separate engine work from ORM serialization.
+    t0 = time.perf_counter()
+    tweets = db.session.execute(
+        db.select(Tweet)
+        .where(Tweet.author_id == g.user.id)
+        .options(
+            joinedload(Tweet.author),
+            selectinload(Tweet.likes),
+            selectinload(Tweet.comments),
+        )
+        .order_by(Tweet.created_at.desc())
+    ).unique().scalars().all()
+    ms_traversal = (time.perf_counter() - t0) * 1000
+
+    t1 = time.perf_counter()
+    payload = [t.report() for t in tweets]
+    ms_build = (time.perf_counter() - t1) * 1000
+
+    report = {
+        'tweets': payload,
+        'ms_traversal': round(ms_traversal, 4),
+        'ms_build_payload': round(ms_build, 4),
+    }
+    return build_response([report], result=payload)
+
 
 @bp.route('/import_data', methods=['POST'])
 def import_data():
