@@ -1,0 +1,16 @@
+# Neo4j topology baseline (natural mode, indexed Profile + typed [:POST] traversal).
+# CSV is mergeable with bench_evaluation.py output via (fan_out,n_tweets,n_channels) keys.
+# dbHits is logical I/O reported by Neo4j PROFILE; latency is wall clock.
+
+fan_out,n_tweets,n_channels,selectivity_pct,neo4j_median_ms,neo4j_mean_ms,neo4j_min_ms,neo4j_db_hits
+200,100,100,50.0,4.129,5.04,3.402,205
+200,40,160,20.0,2.817,2.874,2.564,85
+200,20,180,10.0,2.765,2.774,2.549,45
+200,10,190,5.0,2.722,2.675,2.377,25
+200,4,196,2.0,2.521,2.565,2.38,13
+50,3,47,6.0,2.231,2.352,2.063,56
+100,5,95,5.0,2.451,2.401,2.144,15
+400,20,380,5.0,2.328,2.355,2.065,45
+500,5,495,1.0,2.269,2.299,2.153,15
+500,25,475,5.0,2.054,2.15,1.897,55
+500,50,450,10.0,2.125,2.195,1.941,105
