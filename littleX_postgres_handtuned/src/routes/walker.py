@@ -22,6 +22,7 @@ competent Postgres developer can make it on the LittleX workload:
   index on tweets is what makes load_feed fast.
 """
 
+import time
 from datetime import datetime
 
 from flask import Blueprint, request, g, abort, jsonify
@@ -459,6 +460,94 @@ def add_comment():
             "content": data["content"],
             "created_at": row["created_at"].isoformat(),
         },
+    })
+
+
+# ---------------------------------------------------------------------------
+# create_channel — noise-edge companion to create_tweet for the own-tweets
+# selectivity benchmark. Inserts the channel and auto-adds the creator as
+# a member (channel_members row) in a single round trip.
+# ---------------------------------------------------------------------------
+
+@bp.route("/create_channel", methods=["POST"])
+def create_channel():
+    data = request.get_json(silent=True) or {}
+    name = data.get("name") or ""
+    description = data.get("description") or ""
+    sql = """
+        WITH new_channel AS (
+            INSERT INTO channels (name, description, creator_id)
+            VALUES (%s, %s, %s)
+            RETURNING id, name, description, created_at
+        ), add_member AS (
+            INSERT INTO channel_members (user_id, channel_id)
+            SELECT %s, id FROM new_channel
+        )
+        SELECT id, name, description, created_at FROM new_channel
+    """
+    with db.conn() as c, c.cursor() as cur:
+        cur.execute(sql, (name, description, g.user["id"], g.user["id"]))
+        row = cur.fetchone()
+    return singleton_response({
+        "id": row["id"],
+        "name": row["name"],
+        "description": row["description"],
+        "creator_username": g.user["handle"],
+        "created_at": row["created_at"].isoformat(),
+        "is_member": True,
+    })
+
+
+# ---------------------------------------------------------------------------
+# load_own_tweets — single indexed read of the authenticated user's tweets.
+# Uses the (author_id, created_at DESC) INCLUDE (content) covering index,
+# so this is an index-only scan. Response shape matches load_feed so the
+# bench client reuses the same JSON unpacker.
+# ---------------------------------------------------------------------------
+
+@bp.route("/load_own_tweets", methods=["GET", "POST"])
+def load_own_tweets():
+    sql = """
+        WITH feed AS (
+            SELECT t.id, t.content, t.created_at, u.username AS author_username
+            FROM tweets t
+            JOIN users u ON u.id = t.author_id
+            WHERE t.author_id = %s
+            ORDER BY t.created_at DESC
+        )
+        SELECT COALESCE(json_agg(
+            json_build_object(
+                'id', f.id,
+                'content', f.content,
+                'author_username', f.author_username,
+                'created_at', f.created_at,
+                'likes', COALESCE((
+                    SELECT json_agg(u2.username)
+                    FROM likes l JOIN users u2 ON u2.id = l.user_id
+                    WHERE l.tweet_id = f.id
+                ), '[]'::json),
+                'comments', COALESCE((
+                    SELECT json_agg(json_build_object(
+                        'username', c.author_handle,
+                        'content', c.content,
+                        'created_at', c.created_at
+                    ) ORDER BY c.created_at)
+                    FROM comments c WHERE c.tweet_id = f.id
+                ), '[]'::json)
+            )
+        ), '[]'::json) AS feed
+        FROM feed f
+    """
+    with db.conn() as c, c.cursor() as cur:
+        t0 = time.perf_counter()
+        cur.execute(sql, (g.user["id"],))
+        row = cur.fetchone()
+        ms_traversal = (time.perf_counter() - t0) * 1000
+    feed = row["feed"] or []
+    return singleton_response({
+        "tweets": feed,
+        "ms_traversal": round(ms_traversal, 4),
+        "ms_build_payload": 0.0,  # json_agg happens inside the DB; already accounted for above
     })
 
 

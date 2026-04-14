@@ -1,0 +1,228 @@
+# LittleX Neo4j-over-HTTP baseline on Kubernetes.
+#
+# Two pods:
+#   1. Neo4j 5-community — standalone Bolt+HTTP server, ephemeral storage.
+#      Copy of littleX-benchmarks/Neo4j/k8s/neo4j.yaml but renamed so it
+#      doesn't collide if both deployments coexist.
+#   2. FastAPI app (Deployment) using python:3.12-slim, source shipped via
+#      ConfigMap + initContainer pip-install of fastapi + neo4j driver.
+#
+# Network path matches the PG hand-tuned and SQLAlchemy stacks:
+#   bench host -> kubectl port-forward -> svc/littlex-neo4j-http -> fastapi pod
+#                                                                       |
+#                                                                       v
+#                                                                  svc/littlex-neo4j -> neo4j pod (Bolt)
+---
+# ============================================================================
+# Neo4j
+# ============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: littlex-neo4j
+  labels:
+    app: littlex-neo4j-http
+    component: neo4j
+spec:
+  type: ClusterIP
+  selector:
+    app: littlex-neo4j-http
+    component: neo4j
+  ports:
+    - name: bolt
+      port: 7687
+      targetPort: 7687
+    - name: http
+      port: 7474
+      targetPort: 7474
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: littlex-neo4j
+  labels:
+    app: littlex-neo4j-http
+    component: neo4j
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: littlex-neo4j-http
+      component: neo4j
+  template:
+    metadata:
+      labels:
+        app: littlex-neo4j-http
+        component: neo4j
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: neo4j
+          image: neo4j:5-community
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: NEO4J_AUTH
+              value: "none"
+            - name: NEO4J_server_memory_heap_initial__size
+              value: "1G"
+            - name: NEO4J_server_memory_heap_max__size
+              value: "1G"
+            - name: NEO4J_server_memory_pagecache_size
+              value: "1G"
+            - name: NEO4J_server_default__listen__address
+              value: "0.0.0.0"
+          ports:
+            - name: bolt
+              containerPort: 7687
+            - name: http
+              containerPort: 7474
+          readinessProbe:
+            tcpSocket:
+              port: 7687
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            tcpSocket:
+              port: 7687
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "2Gi"
+            limits:
+              cpu: "2000m"
+              memory: "4Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: logs
+              mountPath: /logs
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: logs
+          emptyDir: {}
+---
+# ============================================================================
+# FastAPI backend
+# ============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: littlex-neo4j-http
+  labels:
+    app: littlex-neo4j-http
+    component: fastapi
+spec:
+  type: ClusterIP
+  selector:
+    app: littlex-neo4j-http
+    component: fastapi
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: littlex-neo4j-http
+  labels:
+    app: littlex-neo4j-http
+    component: fastapi
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: littlex-neo4j-http
+      component: fastapi
+  template:
+    metadata:
+      labels:
+        app: littlex-neo4j-http
+        component: fastapi
+    spec:
+      enableServiceLinks: false
+      initContainers:
+        - name: pip-install
+          image: python:3.12-slim
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              pip install --no-cache-dir --target=/deps -r /code/requirements.txt
+              ls /deps | head -20
+          volumeMounts:
+            - name: src
+              mountPath: /code
+            - name: deps
+              mountPath: /deps
+      containers:
+        - name: fastapi
+          image: python:3.12-slim
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              export PYTHONPATH="/deps:/code"
+              export PATH="/deps/bin:$PATH"
+              cd /code
+              exec python -m uvicorn src:app --host 0.0.0.0 --port 8000
+          env:
+            - name: NEO4J_URI
+              value: "bolt://littlex-neo4j:7687"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          ports:
+            - name: http
+              containerPort: 8000
+          readinessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 3
+            failureThreshold: 40
+          livenessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+          volumeMounts:
+            - name: src
+              mountPath: /code
+            - name: deps
+              mountPath: /deps
+      volumes:
+        - name: src
+          configMap:
+            name: littlex-neo4j-http-src
+            items:
+              - key: requirements.txt
+                path: requirements.txt
+              - key: src__init__.py
+                path: src/__init__.py
+              - key: src_routes__init__.py
+                path: src/routes/__init__.py
+              - key: src_routes_user.py
+                path: src/routes/user.py
+              - key: src_routes_walker.py
+                path: src/routes/walker.py
+        - name: deps
+          emptyDir: {}

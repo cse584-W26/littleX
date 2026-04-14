@@ -32,6 +32,25 @@ like_table = Table(
     Index('idx_likes_user', 'user_id'),
 )
 
+# channel_members — noise-edge association for the own-tweets selectivity
+# benchmark. Structurally mirrors the Jac graph's Profile-->Member-->Channel
+# edges so each backend's user has the same row-set shape during setup.
+channel_member_table = Table(
+    "channel_members",
+    db.Model.metadata,
+    Column('user_id', ForeignKey('user.id'), primary_key=True),
+    Column('channel_id', ForeignKey('channel.id'), primary_key=True),
+    Index('idx_channel_members_channel', 'channel_id'),
+)
+
+
+class Channel(db.Model):
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str]
+    description: Mapped[Optional[str]]
+    creator_id: Mapped[int] = mapped_column(ForeignKey('user.id'), index=True)
+    created_at: Mapped[datetime]
+
 class User(db.Model):
     id: Mapped[int] = mapped_column(primary_key=True)
     # public facing

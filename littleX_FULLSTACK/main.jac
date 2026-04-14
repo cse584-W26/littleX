@@ -22,7 +22,9 @@ import from server {
         import_data,
         clear_cache,
         bench_feed,
-        bench_single_hop
+        bench_single_hop,
+        load_own_tweets,
+        load_own_tweets_jid_only
     }
 
 

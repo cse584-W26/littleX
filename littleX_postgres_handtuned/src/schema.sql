@@ -106,3 +106,26 @@ CREATE TABLE IF NOT EXISTS comments (
 );
 
 CREATE INDEX IF NOT EXISTS idx_comments_tweet_id ON comments (tweet_id);
+
+-- ---------------------------------------------------------------------
+-- channels — noise edges for the own-tweets selectivity benchmark.
+-- Structurally symmetric to the Jac graph's Profile-->Member-->Channel
+-- edges so that the user's row-set has the same shape across backends.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS channels (
+    id           BIGSERIAL    PRIMARY KEY,
+    name         TEXT         NOT NULL,
+    description  TEXT         NOT NULL DEFAULT '',
+    creator_id   BIGINT       NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at   TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS channel_members (
+    user_id     BIGINT       NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    channel_id  BIGINT       NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+    created_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, channel_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_channel_members_user ON channel_members (user_id);
+CREATE INDEX IF NOT EXISTS idx_channel_members_channel ON channel_members (channel_id);

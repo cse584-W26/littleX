@@ -42,6 +42,11 @@ node Tweet {
     has created_at: str = "";
     has comments: list = [];
     has jac_id: str = "";
+    # Denormalized liker usernames, maintained by like_tweet. Lets
+    # read walkers return the likes list without per-tweet incoming-edge
+    # traversal — the Like edges are still authoritative (for access-control
+    # and inverse queries), this is a read-side cache.
+    has likers: list = [];
 }
 
 node Channel {
@@ -64,6 +69,7 @@ walker setup_profile {
     can run with Root entry {
         profiles = [-->(?:Profile)];
         if not profiles {
+            grant(here, level=ConnectPerm);
             p = here ++> Profile(username=self.username, bio=self.bio, created_at=_now());
             grant(p[0], level=ConnectPerm);
             p[0].jac_id = jid(p[0]);
@@ -190,7 +196,7 @@ walker create_tweet {
             disengage;
         }
         profile = profiles[0];
-        tweet = profile +>:Post():+> Tweet(
+        tweet = here +>:Post():+> Tweet(
             content=self.content,
             author_username=profile.username,
             created_at=_now(),
@@ -256,13 +262,17 @@ walker like_tweet {
         if existing_liked_tweet {
             target = existing_liked_tweet[0];
             me del --> target;
-            report {"liked": False, "likes":[u.username for u in [target<-:Like:<-Profile]]};
+            target.likers = [u for u in target.likers if u != username];
+            report {"liked": False, "likes": target.likers};
             disengage;
         }
         target = find_tweet(self.tweet_id);
         if target {
             me +>: Like :+> target;
-            report {"liked": True, "likes":[u.username for u in [target<-:Like:<-Profile]]};
+            if username not in target.likers {
+                target.likers = target.likers + [username];
+            }
+            report {"liked": True, "likes": target.likers};
             disengage;
         }
         report {"error": "Tweet not found"};
@@ -378,7 +388,7 @@ walker create_channel {
             disengage;
         }
         profile = profiles[0];
-        channel_nodes = profile +>:Member():+> Channel(
+        channel_nodes = here +>:Member():+> Channel(
             name=self.name,
             description=self.description,
             creator_username=profile.username,
@@ -588,6 +598,48 @@ walker create_channel_tweet {
             }
         }
         report {"error": "Not a member of this channel"};
+    }
+}
+
+walker load_own_tweets {
+    can run with Root entry {
+        import from time { perf_counter }
+        # Server-timed isolation of the user-written [-->(?:Tweet)] pattern.
+        # This is the workload the Filter Pushdown compiler fusion targets:
+        # idiomatic user code that filters by archetype without manually
+        # invoking the index API (bench_feed already calls the index API
+        # directly, so its ms_my_tweets understates FP's contribution).
+        t0 = perf_counter();
+        tweets = [here-->(?:Tweet)];
+        t1 = perf_counter();
+        payload = [
+            {
+                "id": jid(t),
+                "content": t.content,
+                "author_username": t.author_username,
+                "created_at": t.created_at,
+                "likes": t.likers,
+                "comments": t.comments
+            }
+            for t in tweets
+        ];
+        t2 = perf_counter();
+        report {
+            "tweets": payload,
+            "ms_traversal": round((t1 - t0) * 1000, 4),
+            "ms_build_payload": round((t2 - t1) * 1000, 4)
+        };
+    }
+}
+
+# Isolation probe for the Jac performance investigation. Returns only the
+# jac_id per tweet — no attribute reads beyond jid(t), which should be
+# cached in the anchor's envelope. If THIS walker also shows ~4.5ms/tweet,
+# the bottleneck is not attribute hydration but envelope serialization /
+# Python-side list construction.
+walker load_own_tweets_jid_only {
+    can run with Root entry {
+        report [jid(t) for t in [here-->(?:Tweet)]];
     }
 }
 

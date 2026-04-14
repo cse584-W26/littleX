@@ -1,5 +1,6 @@
+import time
 from src import app, build_error, db, get_validated_body
-from src.models import User, Tweet, Comment, like_table, following_table
+from src.models import User, Tweet, Comment, Channel, like_table, following_table, channel_member_table
 from flask import Blueprint, request, g, abort, jsonify
 from sqlalchemy.orm import aliased, selectinload, joinedload
 from datetime import datetime
@@ -267,6 +268,53 @@ def add_comment():
     db.session.add(new_comment)
     db.session.commit()
     return singleton_response({'success': True, 'comment': new_comment.report()})
+
+@bp.route('/create_channel', methods=['POST'])
+def create_channel():
+    data = request.get_json(silent=True) or {}
+    ch = Channel(
+        name=data.get('name') or '',
+        description=data.get('description') or '',
+        creator_id=g.user.id,
+        created_at=datetime.utcnow(),
+    )
+    db.session.add(ch)
+    db.session.flush()
+    db.session.execute(channel_member_table.insert().values(user_id=g.user.id, channel_id=ch.id))
+    db.session.commit()
+    return singleton_response({
+        'id': ch.id,
+        'name': ch.name,
+        'description': ch.description,
+        'creator_username': g.user.handle,
+        'created_at': ch.created_at.isoformat(),
+        'is_member': True,
+    })
+
+
+@bp.route('/load_own_tweets', methods=['GET', 'POST'])
+def load_own_tweets():
+    tweets_query = (db
+        .select(Tweet)
+        .where(Tweet.author_id == g.user.id)
+        .options(
+            joinedload(Tweet.author),
+            selectinload(Tweet.likes),
+            selectinload(Tweet.comments),
+        )
+        .order_by(Tweet.created_at.desc())
+    )
+    t0 = time.perf_counter()
+    results = db.session.execute(tweets_query).unique().scalars().all()
+    t1 = time.perf_counter()
+    tweets = [r.report() for r in results]
+    t2 = time.perf_counter()
+    return singleton_response({
+        "tweets": tweets,
+        "ms_traversal": round((t1 - t0) * 1000, 4),
+        "ms_build_payload": round((t2 - t1) * 1000, 4),
+    })
+
 
 @bp.route('/import_data', methods=['POST'])
 def import_data():
